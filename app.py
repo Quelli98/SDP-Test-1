@@ -152,6 +152,46 @@ def api_commits(name):
         return jsonify(error=str(exc)), 400
 
 
+@app.get("/api/repos/<name>/merges")
+def api_get_merges(name):
+    repo_path, error = _repo_path_or_error(name)
+    if error:
+        return error
+    return jsonify({
+        "repo": name,
+        "merges": metrics.load_merges(repo_path),
+        "mailmap": (repo_path / ".mailmap").exists(),
+    })
+
+
+@app.put("/api/repos/<name>/merges")
+def api_put_merges(name):
+    repo_path, error = _repo_path_or_error(name)
+    if error:
+        return error
+    merges = (request.get_json(silent=True) or {}).get("merges")
+    if not isinstance(merges, dict) or not all(
+            isinstance(alias, str) and isinstance(canonical, str)
+            for alias, canonical in merges.items()):
+        return jsonify(error="'merges' must map alias email to canonical email."), 400
+    try:
+        known = set(metrics.get_analysis(repo_path).author_commits)
+    except metrics.MetricsError as exc:
+        return jsonify(error=str(exc)), 400
+    for alias, canonical in merges.items():
+        if alias == canonical:
+            return jsonify(error=f"Cannot merge {alias} into itself."), 400
+        if alias not in known:
+            return jsonify(error=f"Unknown author: {alias}"), 400
+        if canonical not in known:
+            return jsonify(error=f"Unknown author: {canonical}"), 400
+    try:
+        saved = metrics.save_merges(repo_path, merges)
+    except OSError as exc:
+        return jsonify(error=f"Could not save merges: {exc}"), 500
+    return jsonify({"repo": name, "merges": saved})
+
+
 if __name__ == "__main__":
     # use_reloader=False: the reloader watches the whole tree and restarts the
     # server mid-request when ingestion writes files into repos/ and uploads/.

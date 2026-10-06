@@ -10,20 +10,26 @@ from a single `git log --numstat -M --no-merges` parse:
 
 Parsed history is cached per repository and invalidated when HEAD moves.
 """
+import json
 import re
 import subprocess
 import threading
 from dataclasses import dataclass
 from itertools import islice
+from pathlib import Path
 
 # numstat entry: "<added>\t<removed>\t<rest>"; with -z a rename emits an
 # empty <rest> followed by two NUL-separated fields: old path, new path.
 _COUNTS = re.compile(r"^(\d+|-)\t(\d+|-)\t(.*)$", re.DOTALL)
 
+# %aN/%aE are the mailmap-aware placeholders: a repo's .mailmap merges
+# author identities automatically, with no extra git invocation.
 _LOG_ARGS = [
     "log", "--no-merges", "-M", "--numstat", "-z",
-    "--format=%x1e%H%x1f%an%x1f%ae%x1f%ct%x1f%s",
+    "--format=%x1e%H%x1f%aN%x1f%aE%x1f%ct%x1f%s",
 ]
+
+_MERGES_FILE = ".rat-merges.json"
 
 
 class MetricsError(Exception):
@@ -50,6 +56,7 @@ class Commit:
 @dataclass
 class Analysis:
     head: str | None
+    mailmap_mtime: int | None
     commits: list
     agg: dict          # path -> {"added", "removed", "mods", "authors"}
     dirs: set          # every directory path that ever held a changed file
@@ -100,21 +107,26 @@ def _parse_numstat(fields: list[str]) -> list[FileChange]:
     return files
 
 
-def aggregate(commits, *, author=None, since=None, until=None, commit_hashes=None):
+def aggregate(commits, *, author=None, since=None, until=None,
+              commit_hashes=None, merge_map=None):
     """Single pass over a commit subset -> (agg, commit_count).
 
     agg maps every touched object path (files, their ancestor directories,
     and the root "") to per-object totals; per-author totals ride along.
+    merge_map translates alias author emails to canonical ones (manual
+    author merging); it never changes object-level totals.
     """
     selected = set(commit_hashes) if commit_hashes else None
     agg = {}
     count = 0
     for commit in commits:
+        email = (_resolve_author(commit.author_email, merge_map)
+                 if merge_map else commit.author_email)
         if since is not None and commit.committer_ts < since:
             continue
         if until is not None and commit.committer_ts >= until:
             continue
-        if author is not None and commit.author_email != author:
+        if author is not None and email != author:
             continue
         if selected is not None and not any(
             commit.hash == h or commit.hash.startswith(h) for h in selected
@@ -145,9 +157,9 @@ def aggregate(commits, *, author=None, since=None, until=None, commit_hashes=Non
                                    "authors": {}}
             obj["added"] += added
             obj["removed"] += removed
-            auth = obj["authors"].get(commit.author_email)
+            auth = obj["authors"].get(email)
             if auth is None:
-                auth = obj["authors"][commit.author_email] = [0, 0, 0]
+                auth = obj["authors"][email] = [0, 0, 0]
             auth[0] += added
             auth[1] += removed
             if added + removed > 0:  # modifications require non-zero churn
@@ -241,6 +253,42 @@ def _head(repo_path: str) -> str | None:
     return proc.stdout.strip() or None if proc.returncode == 0 else None
 
 
+def _mailmap_mtime(repo_path: str) -> int | None:
+    """Mtime of a repo's .mailmap, to invalidate the parse cache."""
+    try:
+        return (Path(repo_path) / ".mailmap").stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def load_merges(repo_path) -> dict:
+    """Manual alias -> canonical author merges persisted beside the repo."""
+    try:
+        data = json.loads((Path(repo_path) / _MERGES_FILE).read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {alias: canonical for alias, canonical in data.items()
+            if isinstance(alias, str) and isinstance(canonical, str)}
+
+
+def save_merges(repo_path, merges: dict) -> dict:
+    """Persist the manual merge map beside the repo and return it."""
+    (Path(repo_path) / _MERGES_FILE).write_text(
+        json.dumps(merges, indent=2, sort_keys=True))
+    return merges
+
+
+def _resolve_author(email: str, mapping: dict) -> str:
+    """Follow alias -> canonical chains to a fixed point (cycle-safe)."""
+    seen = set()
+    while email in mapping and email not in seen:
+        seen.add(email)
+        email = mapping[email]
+    return email
+
+
 def _parse_repo(repo_path: str) -> list[Commit]:
     proc = subprocess.run(["git", "-C", repo_path, *_LOG_ARGS],
                           capture_output=True)
@@ -257,12 +305,18 @@ _CACHE_LOCK = threading.Lock()
 
 
 def get_analysis(repo_path) -> Analysis:
-    """Parse (or reuse) a repository's full history analysis."""
+    """Parse (or reuse) a repository's full history analysis.
+
+    The cache key is (HEAD, .mailmap mtime): editing the mailmap changes
+    author identities without moving HEAD.
+    """
     key = str(repo_path)
     with _CACHE_LOCK:
         head = _head(key)
+        mailmap_mtime = _mailmap_mtime(key)
         cached = _ANALYSIS_CACHE.get(key)
-        if cached is not None and cached.head == head:
+        if (cached is not None and cached.head == head
+                and cached.mailmap_mtime == mailmap_mtime):
             return cached
         commits = _parse_repo(key)
         agg, _ = aggregate(commits)
@@ -270,7 +324,8 @@ def get_analysis(repo_path) -> Analysis:
         for commit in commits:
             names[commit.author_email] = commit.author_name
             counts[commit.author_email] = counts.get(commit.author_email, 0) + 1
-        analysis = Analysis(head, commits, agg, _dir_set(agg), names, counts)
+        analysis = Analysis(head, mailmap_mtime, commits, agg,
+                            _dir_set(agg), names, counts)
         _ANALYSIS_CACHE[key] = analysis
         return analysis
 
@@ -279,7 +334,8 @@ def query(repo_path, *, path="", author=None, since=None, until=None,
           commit_hashes=None) -> dict:
     """Metrics for one object over a filtered commit set."""
     analysis = get_analysis(repo_path)
-    if since is None and until is None and not commit_hashes:
+    merges = load_merges(repo_path)
+    if not merges and since is None and until is None and not commit_hashes:
         if author is None:
             agg, count = analysis.agg, len(analysis.commits)
         else:  # fast path: slice the cached full aggregation
@@ -287,15 +343,30 @@ def query(repo_path, *, path="", author=None, since=None, until=None,
             count = analysis.author_commits.get(author, 0)
     else:
         agg, count = aggregate(analysis.commits, author=author, since=since,
-                               until=until, commit_hashes=commit_hashes)
+                               until=until, commit_hashes=commit_hashes,
+                               merge_map=merges or None)
     return _build_response(analysis, agg, count, path)
 
 
 def list_authors(repo_path) -> list[dict]:
-    """All authors with repository-root totals (for filter dropdowns)."""
+    """All authors with repository-root totals (for filter dropdowns).
+
+    Applies manual merges: aliases disappear into their canonical author.
+    """
     analysis = get_analysis(repo_path)
-    root = analysis.agg.get("", {"added": 0, "removed": 0, "mods": 0,
-                                 "authors": {}})
+    merges = load_merges(repo_path)
+    if merges:
+        agg, _ = aggregate(analysis.commits, merge_map=merges)
+        root = agg.get("", {"added": 0, "removed": 0, "mods": 0,
+                            "authors": {}})
+        counts = {}
+        for commit in analysis.commits:
+            email = _resolve_author(commit.author_email, merges)
+            counts[email] = counts.get(email, 0) + 1
+    else:
+        root = analysis.agg.get("", {"added": 0, "removed": 0, "mods": 0,
+                                     "authors": {}})
+        counts = analysis.author_commits
     total_churn = root["added"] + root["removed"]
     authors = []
     for email, (added, removed, mods) in root["authors"].items():
@@ -303,7 +374,7 @@ def list_authors(repo_path) -> list[dict]:
         authors.append({
             "name": analysis.author_names.get(email, email),
             "email": email,
-            "commits": analysis.author_commits.get(email, 0),
+            "commits": counts.get(email, 0),
             "churn": churn,
             "modifications": mods,
             "ownership": churn / total_churn if total_churn else 0,

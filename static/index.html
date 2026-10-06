@@ -102,6 +102,7 @@
           <input type="date" id="filter-until">
         </label>
         <button id="commits-btn" onclick="openCommitModal()">Commits…</button>
+        <button id="merge-btn" onclick="openMergeModal()">Merge authors…</button>
         <button onclick="applyFilters()">Apply</button>
         <button class="secondary" onclick="resetFilters()">Reset</button>
       </div>
@@ -145,6 +146,36 @@
         <button class="secondary" onclick="commitPage(1)">Next ›</button>
         <button class="secondary" onclick="clearCommitSelection()">Clear</button>
         <button onclick="applyCommitSelection()">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="merge-modal" hidden>
+    <div class="modal-backdrop" onclick="closeMergeModal()"></div>
+    <div class="modal">
+      <h3 style="margin-top:0">Merge authors</h3>
+      <p class="head-info" id="mailmap-info" style="margin:0 0 10px"></p>
+      <div class="filters" style="margin-bottom:10px">
+        <label>Merge author
+          <select id="merge-alias"></select>
+        </label>
+        <span style="align-self:center">→</span>
+        <label>Into author
+          <select id="merge-canonical"></select>
+        </label>
+        <button onclick="addMerge()" style="margin-top:0">Add</button>
+      </div>
+      <div class="table-wrap">
+        <table id="merge-table">
+          <thead><tr><th>Alias author</th><th></th><th>Canonical author</th><th></th></tr></thead>
+          <tbody id="merge-rows"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="merge-empty" hidden>No manual merges.</div>
+      <div class="modal-footer">
+        <span class="spacer"></span>
+        <button class="secondary" onclick="closeMergeModal()">Cancel</button>
+        <button onclick="saveMerges()">Apply</button>
       </div>
     </div>
   </div>
@@ -402,6 +433,101 @@ function applyCommitSelection() {
 function clearCommitSelection() {
   commitModal.selected.clear();
   loadCommitPage().catch(err => setStatus(err.message, "error"));
+}
+
+// --- author merging -----------------------------------------------------------
+
+const mergeState = { aliases: {}, authors: [] };  // aliases: alias email -> canonical email
+
+async function openMergeModal() {
+  const [mergeInfo, authors] = await Promise.all([
+    call(`/api/repos/${encodeURIComponent(metricsState.repo)}/merges`),
+    call(`/api/repos/${encodeURIComponent(metricsState.repo)}/authors`),
+  ]);
+  mergeState.aliases = { ...mergeInfo.merges };
+  mergeState.authors = authors.authors;
+  document.getElementById("mailmap-info").textContent = mergeInfo.mailmap
+    ? "This repository has a .mailmap — those identities are merged automatically."
+    : "This repository has no .mailmap; use manual merges below.";
+  fillMergeSelects();
+  renderMergeRows();
+  document.getElementById("merge-modal").hidden = false;
+}
+
+function closeMergeModal() {
+  document.getElementById("merge-modal").hidden = true;
+}
+
+function fillMergeSelects() {
+  const options = list => list
+    .map(a => `<option value="${a.email}">${a.name} &lt;${a.email}&gt;</option>`)
+    .join("");
+  const aliasable = mergeState.authors.filter(a => !(a.email in mergeState.aliases));
+  document.getElementById("merge-alias").innerHTML = options(aliasable);
+  document.getElementById("merge-canonical").innerHTML = options(mergeState.authors);
+}
+
+function addMerge() {
+  const alias = document.getElementById("merge-alias").value;
+  const canonical = document.getElementById("merge-canonical").value;
+  if (!alias || !canonical) return setStatus("Pick both authors to merge.", "error");
+  if (alias === canonical) return setStatus("An author cannot merge into itself.", "error");
+  mergeState.aliases[alias] = canonical;
+  setStatus("");
+  fillMergeSelects();
+  renderMergeRows();
+}
+
+function removeMerge(alias) {
+  delete mergeState.aliases[alias];
+  fillMergeSelects();
+  renderMergeRows();
+}
+
+function renderMergeRows() {
+  const rows = document.getElementById("merge-rows");
+  rows.innerHTML = "";
+  const entries = Object.entries(mergeState.aliases);
+  document.getElementById("merge-empty").hidden = entries.length > 0;
+  for (const [alias, canonical] of entries) {
+    const tr = document.createElement("tr");
+    const name = email =>
+      (mergeState.authors.find(a => a.email === email) || {}).name || email;
+    [`${name(alias)} <${alias}>`, "→", `${name(canonical)} <${canonical}>`]
+      .forEach(value => {
+        const td = document.createElement("td");
+        td.textContent = value;
+        tr.appendChild(td);
+      });
+    const action = document.createElement("td");
+    const btn = document.createElement("button");
+    btn.className = "close-btn";
+    btn.textContent = "✕";
+    btn.onclick = () => removeMerge(alias);
+    action.appendChild(btn);
+    tr.appendChild(action);
+    rows.appendChild(tr);
+  }
+}
+
+async function saveMerges() {
+  try {
+    await call(`/api/repos/${encodeURIComponent(metricsState.repo)}/merges`, {
+      method: "PUT",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ merges: mergeState.aliases }),
+    });
+    closeMergeModal();
+    // the selected author filter may have been merged away
+    const authors = await loadAuthors();
+    if (metricsState.author && !authors.some(a => a.email === metricsState.author)) {
+      metricsState.author = "";
+      document.getElementById("filter-author").value = "";
+    }
+    await loadMetrics();
+  } catch (err) {
+    setStatus(err.message, "error");
+  }
 }
 
 function renderMetrics(data) {

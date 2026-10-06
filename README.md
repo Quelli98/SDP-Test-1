@@ -29,6 +29,7 @@ Then open http://127.0.0.1:5000
 | GET    | `/api/repos/<r>/metrics` | Metrics for a path over a filtered commit set  |
 | GET    | `/api/repos/<r>/authors` | All authors with repository totals             |
 | GET    | `/api/repos/<r>/commits` | Browsable commit list (search, pagination)     |
+| GET / PUT | `/api/repos/<r>/merges` | Manual alias→canonical author merges          |
 
 ### Metrics query parameters
 
@@ -49,6 +50,17 @@ file/directory (drill-down tree), and a manually selected commit list
 (searchable, paginated commit browser). Commit search matches subject,
 author name/email, and hashes (4+ character prefixes).
 
+### Author merging
+
+- Repositories that ship a `.mailmap` merge identities automatically: history
+  is read through git's mailmap-aware placeholders, so aliases collapse into
+  their canonical author at no extra cost.
+- Manual merges map alias emails onto a canonical email:
+  `PUT /api/repos/<r>/merges` with `{"merges": {"alias@x": "canonical@y"}}`
+  (an empty map clears them). Mappings persist in `.rat-merges.json` beside
+  the repository and re-aggregate author metrics; object-level metrics are
+  unaffected. The dashboard exposes the same flow via *Merge authors…*
+
 ### Metric semantics
 
 - History is the set of non-merge commits reachable from HEAD; the initial
@@ -58,11 +70,14 @@ author name/email, and hashes (4+ character prefixes).
 - Binary files are not measured; deletions count as removed lines.
 - Directory metrics are recursive rollups over immediate children;
   repository metrics are directory metrics at the root.
-- Parsed history is cached per repository and invalidated when HEAD moves.
+- Parsed history is cached per repository and invalidated when HEAD moves
+  or the repository's `.mailmap` changes.
+- Author identities merge through the repository's `.mailmap` and through
+  manual alias→canonical mappings (`.rat-merges.json`).
 
 ## Status
 
 - [x] Skeleton dashboard + both ingestion paths
 - [x] Metric engine (file / directory / repository / commit set / author)
 - [x] Filtering UI (repo, author, path, commit period/selection)
-- [ ] Author merging (mailmap + manual)
+- [x] Author merging (mailmap + manual)
