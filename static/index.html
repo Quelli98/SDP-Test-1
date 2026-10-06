@@ -76,7 +76,7 @@
   <div id="status"></div>
   <h2 style="font-size:1rem;">Ingested repositories</h2>
   <table id="repo-table">
-    <thead><tr><th>Name</th><th>HEAD</th><th>Path</th></tr></thead>
+    <thead><tr><th>Name</th><th>HEAD</th><th>Commits</th><th>Churn</th><th>Authors</th><th>Path</th></tr></thead>
     <tbody id="repo-rows"></tbody>
   </table>
   <div class="empty" id="repo-empty" hidden>No repositories ingested yet.</div>
@@ -241,6 +241,7 @@ async function refresh() {
   const rows = document.getElementById("repo-rows");
   rows.innerHTML = "";
   document.getElementById("repo-empty").hidden = repos.length > 0;
+  const summaryCells = {};  // repo name -> [commits, churn, authors] cells
   for (const repo of repos) {
     const tr = document.createElement("tr");
     const nameCell = document.createElement("td");
@@ -248,6 +249,10 @@ async function refresh() {
     const headCell = document.createElement("td");
     headCell.className = "mono";
     headCell.textContent = repo.head ?? "—";
+    const cells = [document.createElement("td"), document.createElement("td"),
+                   document.createElement("td")];
+    cells.forEach(c => { c.className = "num"; c.textContent = "…"; });
+    summaryCells[repo.name] = cells;
     const pathCell = document.createElement("td");
     pathCell.className = "mono";
     pathCell.textContent = repo.path;
@@ -257,15 +262,31 @@ async function refresh() {
     btn.style.marginTop = "0";
     btn.onclick = () => openMetrics(repo.name);
     actionCell.appendChild(btn);
-    tr.append(nameCell, headCell, pathCell, actionCell);
+    tr.append(nameCell, headCell, ...cells, pathCell, actionCell);
     rows.appendChild(tr);
   }
+  loadSummaries(summaryCells);
   const select = document.getElementById("repo-select");
   select.innerHTML = "<option value=\"\">Open repository…</option>" +
     repos.map(r => `<option value="${r.name}">${r.name}</option>`).join("");
   if (metricsState.repo && repos.some(r => r.name === metricsState.repo)) {
     select.value = metricsState.repo;
   }
+}
+
+// per-repo summaries fill in as each repository parses; large repos do not
+// block the table's first paint
+async function loadSummaries(cellsByRepo) {
+  await Promise.all(Object.entries(cellsByRepo).map(async ([name, cells]) => {
+    try {
+      const s = await call(`/api/repos/${encodeURIComponent(name)}/summary`);
+      cells[0].textContent = fmtInt(s.commits);
+      cells[1].textContent = fmtInt(s.churn);
+      cells[2].textContent = fmtInt(s.authors);
+    } catch (err) {
+      cells.forEach(c => { c.textContent = "—"; c.title = err.message; });
+    }
+  }));
 }
 
 // --- metrics dashboard ----------------------------------------------------

@@ -26,6 +26,7 @@ Then open http://127.0.0.1:5000
 | GET    | `/api/repos`             | List ingested repositories                     |
 | POST   | `/api/repos/clone`       | Clone from `{ "url": "..." }`                  |
 | POST   | `/api/repos/upload`      | Upload a zip (multipart `file` field)          |
+| GET    | `/api/repos/<r>/summary` | Root metrics + author count (overview)         |
 | GET    | `/api/repos/<r>/metrics` | Metrics for a path over a filtered commit set  |
 | GET    | `/api/repos/<r>/authors` | All authors with repository totals             |
 | GET    | `/api/repos/<r>/commits` | Browsable commit list (search, pagination)     |
@@ -42,6 +43,14 @@ Then open http://127.0.0.1:5000
 The response carries the object's metrics (added, removed, growth, churn,
 modifications, modification frequency, churn rate), its immediate children
 (for directories) and per-author churn/modifications/ownership.
+
+### Multiple repositories
+
+Repositories live side by side: the ingestion table doubles as a
+multi-repository overview whose commit/churn/author summaries fill in
+asynchronously (large repositories parse once, then serve from cache), and
+the repository selector in the filter bar switches the analysis target.
+Analyses, caches, and author-merge maps are all per repository.
 
 ### Dashboard filtering
 
@@ -81,3 +90,4 @@ author name/email, and hashes (4+ character prefixes).
 - [x] Metric engine (file / directory / repository / commit set / author)
 - [x] Filtering UI (repo, author, path, commit period/selection)
 - [x] Author merging (mailmap + manual)
+- [x] Multiple repository support (overview + selector)

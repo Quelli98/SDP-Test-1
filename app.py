@@ -152,6 +152,31 @@ def api_commits(name):
         return jsonify(error=str(exc)), 400
 
 
+@app.get("/api/repos/<name>/summary")
+def api_summary(name):
+    """Root metrics + author count for the multi-repository overview."""
+    repo_path, error = _repo_path_or_error(name)
+    if error:
+        return error
+    try:
+        result = metrics.query(repo_path)
+        head = metrics.get_analysis(repo_path).head
+    except metrics.MetricsError as exc:
+        return jsonify(error=str(exc)), 400
+    obj = result["object"]
+    return jsonify({
+        "repo": name,
+        "head": head,
+        "commits": result["commit_count"],
+        "added": obj["added"],
+        "removed": obj["removed"],
+        "growth": obj["growth"],
+        "churn": obj["churn"],
+        "modifications": obj["modifications"],
+        "authors": len(result["authors"]),
+    })
+
+
 @app.get("/api/repos/<name>/merges")
 def api_get_merges(name):
     repo_path, error = _repo_path_or_error(name)
