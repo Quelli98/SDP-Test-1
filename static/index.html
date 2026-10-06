@@ -5,54 +5,125 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RAT — Repo Analysis Tool</title>
 <style>
-  :root { --border: #dde1e6; --muted: #6b7280; --accent: #2563eb; --error: #dc2626; --ok: #16a34a; }
+  :root {
+    --border: #e5e0f4; --muted: #64748b; --accent: #2563eb; --error: #dc2626; --ok: #16a34a;
+    --purple: #7c3aed; --purple-deep: #4c1d95; --purple-soft: #f4efff;
+    --blue: #2563eb; --blue-soft: #edf3ff;
+    --green: #059669; --green-soft: #e7f8f0;
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #111827; background: #f6f7f9; }
-  header { background: #fff; border-bottom: 1px solid var(--border); padding: 16px 32px; }
-  header h1 { margin: 0; font-size: 1.25rem; }
-  header p { margin: 2px 0 0; color: var(--muted); font-size: .875rem; }
-  main { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #1e293b;
+         background: linear-gradient(180deg, #f7f5ff 0%, #f3f6fc 55%, #f0faf4 100%) fixed; }
+
+  /* --- header --- */
+  header { background: linear-gradient(120deg, #4c1d95 0%, #6d28d9 55%, #5b8def 130%);
+           color: #fff; padding: 22px 32px; border-bottom: 4px solid;
+           border-image: linear-gradient(90deg, var(--green), var(--blue), var(--purple)) 1; }
+  header h1 { margin: 0; font-size: 1.35rem; letter-spacing: .02em; }
+  header p { margin: 4px 0 0; color: #e4dcff; font-size: .875rem; }
+
+  main { max-width: 1040px; margin: 26px auto 48px; padding: 0 16px; }
+
+  /* --- section headings --- */
+  .section-title { font-size: 1.05rem; color: var(--purple-deep); margin: 28px 0 12px;
+                   padding-left: 10px; border-left: 4px solid var(--purple); }
+
+  /* --- cards / text boxes --- */
   .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  .card { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
-  .card h2 { margin: 0 0 12px; font-size: 1rem; }
-  input[type=text] { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: .875rem; }
-  button { margin-top: 10px; padding: 8px 16px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font-size: .875rem; cursor: pointer; }
+  .card { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 18px;
+          box-shadow: 0 1px 4px rgba(76, 29, 149, .07); }
+  .card--blue { border-top: 4px solid var(--blue); }
+  .card--green { border-top: 4px solid var(--green); }
+  .card h2 { margin: 0 0 12px; font-size: 1rem; color: var(--purple-deep); }
+
+  /* --- inputs --- */
+  input[type=text] { width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px;
+                     font-size: .875rem; background: #fdfcff; }
+  input[type=file] { width: 100%; font-size: .875rem; color: var(--muted); }
+  input:focus, select:focus { outline: 2px solid #c9b7f5; border-color: var(--purple); }
+  input[type=checkbox] { accent-color: var(--purple); }
+
+  /* --- buttons --- */
+  button { margin-top: 10px; padding: 9px 18px; border: 0; border-radius: 8px; font-size: .875rem;
+           font-weight: 600; cursor: pointer; color: #fff;
+           background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+           box-shadow: 0 1px 3px rgba(109, 40, 217, .35); }
+  button:hover { filter: brightness(1.07); }
   button:disabled { opacity: .6; cursor: wait; }
+  #clone-btn { background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+               box-shadow: 0 1px 3px rgba(29, 78, 216, .35); }
+  #upload-btn { background: linear-gradient(135deg, #10b981, #047857);
+                box-shadow: 0 1px 3px rgba(4, 120, 87, .35); }
+  .secondary { background: #fff; color: var(--blue); border: 1px solid #bcd2f7; box-shadow: none; }
+  .secondary:hover { background: var(--blue-soft); filter: none; }
+  .close-btn { background: none; color: var(--muted); border: 0; font-size: 1rem; cursor: pointer;
+               padding: 0; margin: 0; box-shadow: none; }
+  .close-btn:hover { filter: none; color: var(--error); }
+
+  /* --- status --- */
   #status { margin: 16px 0; font-size: .875rem; min-height: 1.2em; }
-  #status.error { color: var(--error); }
-  #status.ok { color: var(--ok); }
-  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: .875rem; }
-  th { background: #f3f4f6; }
-  td.mono { font-family: ui-monospace, monospace; color: var(--muted); }
-  .empty { padding: 24px; text-align: center; color: var(--muted); font-size: .875rem; }
+  #status.error { color: #b91c1c; background: #fdeeee; border-left: 4px solid var(--error);
+                  padding: 10px 14px; border-radius: 8px; }
+  #status.ok { color: #047857; background: var(--green-soft); border-left: 4px solid var(--ok);
+               padding: 10px 14px; border-radius: 8px; }
+
+  /* --- tables --- */
+  table { width: 100%; border-collapse: separate; border-spacing: 0; background: #fff;
+          border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+          box-shadow: 0 1px 4px rgba(76, 29, 149, .06); }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid #efeaf9; font-size: .875rem; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:nth-child(even) { background: #fbfaff; }
+  th { background: var(--purple-soft); color: var(--purple-deep); font-size: .72rem;
+       text-transform: uppercase; letter-spacing: .05em; }
+  td.mono { font-family: ui-monospace, monospace; color: var(--muted); font-size: .8125rem; }
+  .empty { padding: 22px; text-align: center; color: var(--muted); font-size: .875rem;
+           border: 1px dashed #d8d1ef; border-radius: 10px; background: #fdfcff; }
+
+  /* --- metrics section --- */
   #metrics-section { margin-top: 24px; }
-  #metrics-section .card > h2 { display: flex; justify-content: space-between; align-items: center; }
-  .close-btn { background: none; color: var(--muted); border: 0; font-size: 1rem; cursor: pointer; padding: 0; margin: 0; }
-  .filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 16px; }
-  .filters label { display: flex; flex-direction: column; gap: 4px; font-size: .75rem; color: var(--muted); }
-  .filters select, .filters input[type=date] { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: .875rem; }
+  #metrics-section .card > h2 { display: flex; justify-content: space-between; align-items: center;
+                                color: var(--purple-deep); }
+  .filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 16px;
+             background: #f9f7ff; border: 1px solid #ece6fa; border-radius: 10px; padding: 12px; }
+  .filters label { display: flex; flex-direction: column; gap: 4px; font-size: .7rem; color: var(--muted);
+                   font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .filters select, .filters input[type=date] { padding: 6px 8px; border: 1px solid var(--border);
+                                               border-radius: 6px; font-size: .875rem; background: #fff; }
   .filters button { margin-top: 0; }
-  .secondary { background: #4b5563; }
+  .filters select { max-width: 220px; }
   .breadcrumb { font-size: .875rem; margin-bottom: 8px; }
-  .breadcrumb a { color: var(--accent); text-decoration: none; }
-  h3 { font-size: .875rem; margin: 16px 0 6px; color: var(--muted); }
+  .breadcrumb a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  h3 { font-size: .875rem; margin: 18px 0 8px; color: #334155; }
+  #object-title { border-left: 3px solid var(--purple); padding-left: 8px; }
+  #children-title { border-left: 3px solid var(--blue); padding-left: 8px; }
+  h3.title-authors { border-left: 3px solid var(--green); padding-left: 8px; }
   #metrics-tables th, #metrics-tables td { font-size: .8125rem; padding: 8px 10px; }
   #metrics-tables td.num { text-align: right; font-variant-numeric: tabular-nums; }
   #children-table tbody tr { cursor: pointer; }
-  #children-table tbody tr:hover { background: #f0f4ff; }
-  .type-dir { font-weight: 600; }
+  #children-table tbody tr:hover { background: var(--blue-soft); }
+  .type-dir { font-weight: 600; color: var(--purple-deep); }
   .head-info { font-size: .75rem; color: var(--muted); }
-  td.loading { color: var(--muted); text-align: center; padding: 14px; }
-  #commit-modal { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; }
-  #commit-modal[hidden] { display: none; }
-  .modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.4); }
-  .modal { position: relative; background: #fff; border-radius: 8px; padding: 16px; width: min(720px, 92vw); max-height: 80vh; display: flex; flex-direction: column; }
+  td.loading { color: var(--muted); text-align: center; padding: 14px; font-style: italic;
+               animation: rat-pulse 1.2s ease-in-out infinite; }
+  @keyframes rat-pulse { 50% { opacity: .45; } }
+
+  /* --- modals --- */
+  #commit-modal, #merge-modal { position: fixed; inset: 0; z-index: 10; display: flex;
+                                align-items: center; justify-content: center; }
+  #commit-modal[hidden], #merge-modal[hidden] { display: none; }
+  .modal-backdrop { position: absolute; inset: 0; background: rgba(45, 26, 84, .45); }
+  .modal { position: relative; background: #fff; border-radius: 12px; padding: 18px; width: min(720px, 92vw);
+           max-height: 80vh; display: flex; flex-direction: column;
+           box-shadow: 0 20px 50px rgba(45, 26, 84, .35); }
+  #commit-modal .modal { border-top: 5px solid var(--blue); }
+  #merge-modal .modal { border-top: 5px solid var(--green); }
+  .modal h3 { color: var(--purple-deep); }
   .modal input[type=text] { margin-bottom: 10px; }
   .table-wrap { overflow: auto; }
-  .modal-footer { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .modal-footer { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap;
+                  border-top: 1px solid var(--border); padding-top: 12px; }
   .modal-footer .spacer { flex: 1; }
-  .filters select { max-width: 220px; }
   @media (max-width: 700px) { .cards { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -62,20 +133,21 @@
   <p>Ingest git repositories by cloning a remote URL or uploading a zip archive.</p>
 </header>
 <main>
+  <h2 class="section-title">Ingest a repository</h2>
   <div class="cards">
-    <div class="card">
+    <div class="card card--blue">
       <h2>Clone from URL</h2>
       <input type="text" id="clone-url" placeholder="https://github.com/user/repo.git" autofocus>
       <button id="clone-btn" onclick="cloneRepo()">Clone</button>
     </div>
-    <div class="card">
+    <div class="card card--green">
       <h2>Upload repository zip</h2>
       <input type="file" id="zip-file" accept=".zip">
       <button id="upload-btn" onclick="uploadZip()">Upload</button>
     </div>
   </div>
   <div id="status"></div>
-  <h2 style="font-size:1rem;">Ingested repositories</h2>
+  <h2 class="section-title">Ingested repositories</h2>
   <table id="repo-table">
     <thead><tr><th>Name</th><th>HEAD</th><th>Commits</th><th>Churn</th><th>Authors</th><th>Path</th></tr></thead>
     <tbody id="repo-rows"></tbody>
@@ -120,7 +192,7 @@
           <tbody id="children-rows"></tbody>
         </table>
         <div class="empty" id="children-empty" hidden></div>
-        <h3>Authors on this object</h3>
+        <h3 class="title-authors">Authors on this object</h3>
         <table id="authors-table">
           <thead><tr><th>Author</th><th>Email</th><th>Churn</th><th>Mods</th><th>Ownership</th></tr></thead>
           <tbody id="author-rows"></tbody>
