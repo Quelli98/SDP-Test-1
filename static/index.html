@@ -43,6 +43,15 @@
   #children-table tbody tr:hover { background: #f0f4ff; }
   .type-dir { font-weight: 600; }
   .head-info { font-size: .75rem; color: var(--muted); }
+  #commit-modal { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; }
+  #commit-modal[hidden] { display: none; }
+  .modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.4); }
+  .modal { position: relative; background: #fff; border-radius: 8px; padding: 16px; width: min(720px, 92vw); max-height: 80vh; display: flex; flex-direction: column; }
+  .modal input[type=text] { margin-bottom: 10px; }
+  .table-wrap { overflow: auto; }
+  .modal-footer { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .modal-footer .spacer { flex: 1; }
+  .filters select { max-width: 220px; }
   @media (max-width: 700px) { .cards { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -80,6 +89,9 @@
         <button class="close-btn" onclick="closeMetrics()" title="Close">✕</button>
       </h2>
       <div class="filters">
+        <label>Repository
+          <select id="repo-select" onchange="switchRepo(this.value)"><option value="">Open repository…</option></select>
+        </label>
         <label>Author
           <select id="filter-author" onchange="applyFilters()"><option value="">All authors</option></select>
         </label>
@@ -89,6 +101,7 @@
         <label>To
           <input type="date" id="filter-until">
         </label>
+        <button id="commits-btn" onclick="openCommitModal()">Commits…</button>
         <button onclick="applyFilters()">Apply</button>
         <button class="secondary" onclick="resetFilters()">Reset</button>
       </div>
@@ -113,6 +126,28 @@
       </div>
     </div>
   </section>
+
+  <div id="commit-modal" hidden>
+    <div class="modal-backdrop" onclick="closeCommitModal()"></div>
+    <div class="modal">
+      <h3 style="margin-top:0">Select commits</h3>
+      <input type="text" id="commit-search" placeholder="Search subject, author, or hash…" oninput="commitSearchChanged()">
+      <div class="table-wrap">
+        <table id="commit-table">
+          <thead><tr><th></th><th>Hash</th><th>Author</th><th>Date</th><th>Subject</th></tr></thead>
+          <tbody id="commit-rows"></tbody>
+        </table>
+      </div>
+      <div class="modal-footer">
+        <span id="commit-page-info" class="head-info"></span>
+        <span class="spacer"></span>
+        <button class="secondary" onclick="commitPage(-1)">‹ Prev</button>
+        <button class="secondary" onclick="commitPage(1)">Next ›</button>
+        <button class="secondary" onclick="clearCommitSelection()">Clear</button>
+        <button onclick="applyCommitSelection()">Apply</button>
+      </div>
+    </div>
+  </div>
 </main>
 <script>
 const statusEl = document.getElementById("status");
@@ -194,22 +229,32 @@ async function refresh() {
     tr.append(nameCell, headCell, pathCell, actionCell);
     rows.appendChild(tr);
   }
+  const select = document.getElementById("repo-select");
+  select.innerHTML = "<option value=\"\">Open repository…</option>" +
+    repos.map(r => `<option value="${r.name}">${r.name}</option>`).join("");
+  if (metricsState.repo && repos.some(r => r.name === metricsState.repo)) {
+    select.value = metricsState.repo;
+  }
 }
 
 // --- metrics dashboard ----------------------------------------------------
 
-let metricsState = { repo: null, path: "", author: "", since: "", until: "" };
+let metricsState = { repo: null, path: "", author: "", since: "", until: "", commits: [] };
+
+const commitModal = { selected: new Set(), search: "", offset: 0, pageSize: 50, total: 0 };
+let searchTimer = null;
 
 const fmtInt = n => Number(n).toLocaleString();
 const fmtRate = n => Number(n).toFixed(3);
 const fmtPct = n => (Number(n) * 100).toFixed(1) + "%";
 
 async function openMetrics(repo) {
-  metricsState = { repo, path: "", author: "", since: "", until: "" };
+  metricsState = { repo, path: "", author: "", since: "", until: "", commits: [] };
   document.getElementById("filter-since").value = "";
   document.getElementById("filter-until").value = "";
   document.getElementById("metrics-section").hidden = false;
   setStatus("");
+  updateCommitsButton();
   try {
     await loadAuthors();
     await loadMetrics();
@@ -217,6 +262,15 @@ async function openMetrics(repo) {
     setStatus(err.message, "error");
   }
   document.getElementById("metrics-section").scrollIntoView({ behavior: "smooth" });
+}
+
+function switchRepo(name) {
+  if (name) openMetrics(name);
+}
+
+function updateCommitsButton() {
+  document.getElementById("commits-btn").textContent =
+    metricsState.commits.length ? `Commits (${metricsState.commits.length})` : "Commits…";
 }
 
 function closeMetrics() {
@@ -243,6 +297,8 @@ function resetFilters() {
   document.getElementById("filter-author").value = "";
   document.getElementById("filter-since").value = "";
   document.getElementById("filter-until").value = "";
+  metricsState.commits = [];
+  updateCommitsButton();
   applyFilters();
 }
 
@@ -258,8 +314,94 @@ async function loadMetrics() {
   if (s.author) params.set("author", s.author);
   if (s.since) params.set("since", s.since);
   if (s.until) params.set("until", s.until);
+  if (s.commits.length) params.set("commits", s.commits.join(","));
   const data = await call(`/api/repos/${encodeURIComponent(s.repo)}/metrics?${params}`);
   renderMetrics(data);
+}
+
+// --- commit selection modal --------------------------------------------------
+
+async function openCommitModal() {
+  commitModal.selected = new Set(metricsState.commits);
+  commitModal.search = "";
+  commitModal.offset = 0;
+  document.getElementById("commit-search").value = "";
+  document.getElementById("commit-modal").hidden = false;
+  await loadCommitPage();
+}
+
+function closeCommitModal() {
+  document.getElementById("commit-modal").hidden = true;
+}
+
+function commitSearchChanged() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    commitModal.search = document.getElementById("commit-search").value.trim();
+    commitModal.offset = 0;
+    loadCommitPage().catch(err => setStatus(err.message, "error"));
+  }, 250);
+}
+
+async function commitPage(direction) {
+  const next = commitModal.offset + direction * commitModal.pageSize;
+  if (next < 0 || next >= commitModal.total) return;
+  commitModal.offset = next;
+  await loadCommitPage();
+}
+
+async function loadCommitPage() {
+  const params = new URLSearchParams({
+    limit: commitModal.pageSize, offset: commitModal.offset,
+  });
+  if (commitModal.search) params.set("search", commitModal.search);
+  const data = await call(`/api/repos/${encodeURIComponent(metricsState.repo)}/commits?${params}`);
+  commitModal.total = data.total;
+  const rows = document.getElementById("commit-rows");
+  rows.innerHTML = "";
+  for (const c of data.commits) {
+    const tr = document.createElement("tr");
+    const checkboxCell = document.createElement("td");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = commitModal.selected.has(c.hash);
+    checkbox.onchange = () => {
+      if (checkbox.checked) commitModal.selected.add(c.hash);
+      else commitModal.selected.delete(c.hash);
+      updateCommitPageInfo();
+    };
+    checkboxCell.appendChild(checkbox);
+    tr.appendChild(checkboxCell);
+    [c.short, c.author_name,
+     new Date(c.committer_ts * 1000).toISOString().slice(0, 10), c.subject]
+      .forEach((value, i) => {
+        const td = document.createElement("td");
+        if (i === 0) td.className = "mono";
+        td.textContent = value;
+        tr.appendChild(td);
+      });
+    rows.appendChild(tr);
+  }
+  updateCommitPageInfo();
+}
+
+function updateCommitPageInfo() {
+  const info = document.getElementById("commit-page-info");
+  info.textContent = commitModal.total
+    ? `${Math.min(commitModal.offset + 1, commitModal.total)}–${Math.min(commitModal.offset + commitModal.pageSize, commitModal.total)} of ${commitModal.total.toLocaleString()} · ${commitModal.selected.size} selected`
+    : "No commits match";
+}
+
+function applyCommitSelection() {
+  metricsState.commits = [...commitModal.selected];
+  updateCommitsButton();
+  closeCommitModal();
+  loadMetrics().catch(err => setStatus(err.message, "error"));
+}
+
+function clearCommitSelection() {
+  commitModal.selected.clear();
+  loadCommitPage().catch(err => setStatus(err.message, "error"));
 }
 
 function renderMetrics(data) {

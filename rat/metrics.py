@@ -14,6 +14,7 @@ import re
 import subprocess
 import threading
 from dataclasses import dataclass
+from itertools import islice
 
 # numstat entry: "<added>\t<removed>\t<rest>"; with -z a rename emits an
 # empty <rest> followed by two NUL-separated fields: old path, new path.
@@ -21,7 +22,7 @@ _COUNTS = re.compile(r"^(\d+|-)\t(\d+|-)\t(.*)$", re.DOTALL)
 
 _LOG_ARGS = [
     "log", "--no-merges", "-M", "--numstat", "-z",
-    "--format=%x1e%H%x1f%an%x1f%ae%x1f%ct",
+    "--format=%x1e%H%x1f%an%x1f%ae%x1f%ct%x1f%s",
 ]
 
 
@@ -42,6 +43,7 @@ class Commit:
     author_name: str
     author_email: str
     committer_ts: int
+    subject: str
     files: list  # list[FileChange]
 
 
@@ -63,11 +65,11 @@ def parse_log(raw: str) -> list[Commit]:
             continue
         fields = chunk.split("\0")
         parts = fields[0].split("\x1f")
-        if len(parts) != 4:  # defensive: malformed header (e.g. odd author name)
+        if len(parts) != 5:  # defensive: malformed header (e.g. odd author name)
             continue
-        commit_hash, name, email, ts = parts
+        commit_hash, name, email, ts, subject = parts
         try:
-            commits.append(Commit(commit_hash, name, email, int(ts),
+            commits.append(Commit(commit_hash, name, email, int(ts), subject,
                                   _parse_numstat(fields[1:])))
         except ValueError:
             continue
@@ -308,3 +310,31 @@ def list_authors(repo_path) -> list[dict]:
         })
     authors.sort(key=lambda a: -a["churn"])
     return authors
+
+
+def list_commits(repo_path, *, search=None, limit=50, offset=0):
+    """Browseable commit list (newest first) for manual commit-set selection."""
+    analysis = get_analysis(repo_path)
+    commits = analysis.commits
+    if search:
+        needle = search.lower()
+        # short needles match subject/author only; >= 4 chars also match
+        # hashes (git short-hash convention), avoiding spurious hex hits
+        use_hash = len(needle) >= 4
+        commits = [c for c in commits
+                   if needle in c.subject.lower()
+                   or needle in c.author_name.lower()
+                   or needle in c.author_email.lower()
+                   or (use_hash and needle in c.hash)]
+    window = list(islice(reversed(commits), offset, offset + limit))
+    return {
+        "total": len(commits),
+        "commits": [{
+            "hash": c.hash,
+            "short": c.hash[:7],
+            "author_name": c.author_name,
+            "author_email": c.author_email,
+            "committer_ts": c.committer_ts,
+            "subject": c.subject,
+        } for c in window],
+    }

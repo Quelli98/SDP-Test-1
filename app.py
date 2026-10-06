@@ -134,6 +134,24 @@ def api_authors(name):
     return jsonify({"repo": name, "authors": authors})
 
 
+@app.get("/api/repos/<name>/commits")
+def api_commits(name):
+    repo_path, error = _repo_path_or_error(name)
+    if error:
+        return error
+    try:
+        limit = min(int(request.args.get("limit", 50)), 500)
+        offset = max(int(request.args.get("offset", 0)), 0)
+    except ValueError:
+        return jsonify(error="'limit' and 'offset' must be integers."), 400
+    try:
+        return jsonify(metrics.list_commits(
+            repo_path, search=request.args.get("search") or None,
+            limit=limit, offset=offset))
+    except metrics.MetricsError as exc:
+        return jsonify(error=str(exc)), 400
+
+
 if __name__ == "__main__":
     # use_reloader=False: the reloader watches the whole tree and restarts the
     # server mid-request when ingestion writes files into repos/ and uploads/.

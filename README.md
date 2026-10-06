@@ -28,6 +28,7 @@ Then open http://127.0.0.1:5000
 | POST   | `/api/repos/upload`      | Upload a zip (multipart `file` field)          |
 | GET    | `/api/repos/<r>/metrics` | Metrics for a path over a filtered commit set  |
 | GET    | `/api/repos/<r>/authors` | All authors with repository totals             |
+| GET    | `/api/repos/<r>/commits` | Browsable commit list (search, pagination)     |
 
 ### Metrics query parameters
 
@@ -40,6 +41,13 @@ Then open http://127.0.0.1:5000
 The response carries the object's metrics (added, removed, growth, churn,
 modifications, modification frequency, churn rate), its immediate children
 (for directories) and per-author churn/modifications/ownership.
+
+### Dashboard filtering
+
+The dashboard filters metrics by repository (selector), author, date range,
+file/directory (drill-down tree), and a manually selected commit list
+(searchable, paginated commit browser). Commit search matches subject,
+author name/email, and hashes (4+ character prefixes).
 
 ### Metric semantics
 
@@ -56,5 +64,5 @@ modifications, modification frequency, churn rate), its immediate children
 
 - [x] Skeleton dashboard + both ingestion paths
 - [x] Metric engine (file / directory / repository / commit set / author)
-- [ ] Filtering UI (repo, author, path, commit period/selection)
+- [x] Filtering UI (repo, author, path, commit period/selection)
 - [ ] Author merging (mailmap + manual)
