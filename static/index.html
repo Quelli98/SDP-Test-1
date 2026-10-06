@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAT — Repo Analysis Tool</title>
+<style>
+  :root { --border: #dde1e6; --muted: #6b7280; --accent: #2563eb; --error: #dc2626; --ok: #16a34a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #111827; background: #f6f7f9; }
+  header { background: #fff; border-bottom: 1px solid var(--border); padding: 16px 32px; }
+  header h1 { margin: 0; font-size: 1.25rem; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: .875rem; }
+  main { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .card { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .card h2 { margin: 0 0 12px; font-size: 1rem; }
+  input[type=text] { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: .875rem; }
+  button { margin-top: 10px; padding: 8px 16px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font-size: .875rem; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: wait; }
+  #status { margin: 16px 0; font-size: .875rem; min-height: 1.2em; }
+  #status.error { color: var(--error); }
+  #status.ok { color: var(--ok); }
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: .875rem; }
+  th { background: #f3f4f6; }
+  td.mono { font-family: ui-monospace, monospace; color: var(--muted); }
+  .empty { padding: 24px; text-align: center; color: var(--muted); font-size: .875rem; }
+  @media (max-width: 700px) { .cards { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>RAT — Repo Analysis Tool</h1>
+  <p>Ingest git repositories by cloning a remote URL or uploading a zip archive.</p>
+</header>
+<main>
+  <div class="cards">
+    <div class="card">
+      <h2>Clone from URL</h2>
+      <input type="text" id="clone-url" placeholder="https://github.com/user/repo.git" autofocus>
+      <button id="clone-btn" onclick="cloneRepo()">Clone</button>
+    </div>
+    <div class="card">
+      <h2>Upload repository zip</h2>
+      <input type="file" id="zip-file" accept=".zip">
+      <button id="upload-btn" onclick="uploadZip()">Upload</button>
+    </div>
+  </div>
+  <div id="status"></div>
+  <h2 style="font-size:1rem;">Ingested repositories</h2>
+  <table id="repo-table">
+    <thead><tr><th>Name</th><th>HEAD</th><th>Path</th></tr></thead>
+    <tbody id="repo-rows"></tbody>
+  </table>
+  <div class="empty" id="repo-empty" hidden>No repositories ingested yet.</div>
+</main>
+<script>
+const statusEl = document.getElementById("status");
+
+function setStatus(message, kind) {
+  statusEl.textContent = message;
+  statusEl.className = kind || "";
+}
+
+async function call(url, options) {
+  const res = await fetch(url, options);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+  return body;
+}
+
+async function cloneRepo() {
+  const url = document.getElementById("clone-url").value.trim();
+  const btn = document.getElementById("clone-btn");
+  if (!url) return setStatus("Enter a repository URL first.", "error");
+  btn.disabled = true;
+  setStatus("Cloning repository…");
+  try {
+    const repo = await call("/api/repos/clone", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({url}),
+    });
+    setStatus(`Cloned ${repo.name} @ ${repo.head}`, "ok");
+    refresh();
+  } catch (err) {
+    setStatus(err.message, "error");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function uploadZip() {
+  const input = document.getElementById("zip-file");
+  const btn = document.getElementById("upload-btn");
+  if (!input.files.length) return setStatus("Choose a zip file first.", "error");
+  const form = new FormData();
+  form.append("file", input.files[0]);
+  btn.disabled = true;
+  setStatus("Uploading zip…");
+  try {
+    const repo = await call("/api/repos/upload", {method: "POST", body: form});
+    setStatus(`Ingested ${repo.name} @ ${repo.head}`, "ok");
+    input.value = "";
+    refresh();
+  } catch (err) {
+    setStatus(err.message, "error");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function refresh() {
+  const repos = await call("/api/repos");
+  const rows = document.getElementById("repo-rows");
+  rows.innerHTML = "";
+  document.getElementById("repo-empty").hidden = repos.length > 0;
+  for (const repo of repos) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${repo.name}</td><td class="mono">${repo.head ?? "—"}</td><td class="mono">${repo.path}</td>`;
+    rows.appendChild(tr);
+  }
+}
+
+refresh().catch(err => setStatus(err.message, "error"));
+</script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+repos/
+uploads/
+__pycache__/
+*.pyc
+.fixtures/
+.qoder/
