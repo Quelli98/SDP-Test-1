@@ -76,13 +76,13 @@ Not used — plain Python/Flask; no container setup is required.
 > Replace `<model>` below with the model name shown in your Qoder settings
 > before submitting.
 
-This repository makes use of AI code generation using the following tools: Qoder[<model>].
+This repository makes use of AI code generation using the following tools: Qoder[Auto (smart routing tier)].
 
 This repository does not use AI in-line editing tools.
 
 This repository does not use AI code review.
 
-This README was generated with the assistance of: Qoder[<model>].
+This README was generated with the assistance of: Qoder[Auto (smart routing tier)].
 
 ## API reference
 
