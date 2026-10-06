@@ -2,7 +2,16 @@
 
 A web-app dashboard that ingests git repositories and analyses their metrics
 (lines added/removed, growth, churn, authorship) per author, file, directory,
-and repository.
+and repository. Supports multiple repositories side by side with filtering
+by author, path, time period, and manual commit selection, plus mailmap and
+manual author merging.
+
+## Requirements
+
+- Python 3.10+
+- The `git` command-line tool (repository ingestion and metric computation
+  both run through a single `git log` pass per repository)
+- Flask (the only Python dependency)
 
 ## Running
 
@@ -11,7 +20,22 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Then open http://127.0.0.1:5000
+Then open http://127.0.0.1:5000 — no database or configuration is needed;
+repositories are cloned into `repos/` and analysed on demand.
+
+Alternatively: `python -m flask --app app run` (production-style, debug off).
+
+## Performance
+
+Each repository's history is parsed once per HEAD (`git log --no-merges -M
+--numstat -z`), then served from an in-memory cache that is also persisted
+to `.rat-cache.json` beside the repository — a server restart restores
+large histories from disk instead of re-parsing them. The cache is
+invalidated automatically when HEAD moves or `.mailmap` changes.
+
+Reference timings: cJSON (~1k commits) parses in ~0.2 s; Redis (~12k
+commits, ~216 MB .git) parses in ~9 s once, then serves any query in
+~10 ms from cache and restores in well under a second after a restart.
 
 ## Ingestion
 
@@ -79,8 +103,8 @@ author name/email, and hashes (4+ character prefixes).
 - Binary files are not measured; deletions count as removed lines.
 - Directory metrics are recursive rollups over immediate children;
   repository metrics are directory metrics at the root.
-- Parsed history is cached per repository and invalidated when HEAD moves
-  or the repository's `.mailmap` changes.
+- Parsed history is cached per repository (memory + `.rat-cache.json`) and
+  invalidated when HEAD moves or the repository's `.mailmap` changes.
 - Author identities merge through the repository's `.mailmap` and through
   manual alias→canonical mappings (`.rat-merges.json`).
 
@@ -91,3 +115,4 @@ author name/email, and hashes (4+ character prefixes).
 - [x] Filtering UI (repo, author, path, commit period/selection)
 - [x] Author merging (mailmap + manual)
 - [x] Multiple repository support (overview + selector)
+- [x] Persistent per-repo metric cache, loading states, JSON error handling

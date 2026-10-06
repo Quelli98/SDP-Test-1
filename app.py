@@ -23,6 +23,34 @@ app = Flask(__name__, static_folder="static", static_url_path="")
 app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024  # accept large repo zips
 
 
+# API clients get JSON errors, never Flask's default HTML pages.
+@app.errorhandler(404)
+def not_found(exc):
+    if request.path.startswith("/api/"):
+        return jsonify(error=f"Unknown endpoint: {request.path}"), 404
+    return exc
+
+
+@app.errorhandler(405)
+def method_not_allowed(exc):
+    if request.path.startswith("/api/"):
+        return jsonify(error="Method not allowed on this endpoint."), 405
+    return exc
+
+
+@app.errorhandler(413)
+def too_large(exc):
+    return jsonify(error="Uploaded file exceeds the 512 MB limit."), 413
+
+
+@app.errorhandler(Exception)
+def unexpected_error(exc):
+    if not request.path.startswith("/api/"):
+        raise exc
+    app.logger.exception("Unhandled error on %s", request.path)
+    return jsonify(error="Internal server error."), 500
+
+
 @app.get("/")
 def index():
     return send_from_directory(app.static_folder, "index.html")

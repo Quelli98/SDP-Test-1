@@ -43,6 +43,7 @@
   #children-table tbody tr:hover { background: #f0f4ff; }
   .type-dir { font-weight: 600; }
   .head-info { font-size: .75rem; color: var(--muted); }
+  td.loading { color: var(--muted); text-align: center; padding: 14px; }
   #commit-modal { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; }
   #commit-modal[hidden] { display: none; }
   .modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.4); }
@@ -300,6 +301,16 @@ const fmtInt = n => Number(n).toLocaleString();
 const fmtRate = n => Number(n).toFixed(3);
 const fmtPct = n => (Number(n) * 100).toFixed(1) + "%";
 
+function loadingRow(text, cols) {
+  const tr = document.createElement("tr");
+  const td = document.createElement("td");
+  td.colSpan = cols;
+  td.className = "loading";
+  td.textContent = text;
+  tr.appendChild(td);
+  return tr;
+}
+
 async function openMetrics(repo) {
   metricsState = { repo, path: "", author: "", since: "", until: "", commits: [] };
   document.getElementById("filter-since").value = "";
@@ -367,6 +378,14 @@ async function loadMetrics() {
   if (s.since) params.set("since", s.since);
   if (s.until) params.set("until", s.until);
   if (s.commits.length) params.set("commits", s.commits.join(","));
+  document.getElementById("object-row").innerHTML =
+    "<td class=\"loading\" colspan=\"7\">Loading metrics…</td>";
+  const kids = document.getElementById("children-rows");
+  kids.innerHTML = "";
+  kids.appendChild(loadingRow("Loading…", 9));
+  const authors = document.getElementById("author-rows");
+  authors.innerHTML = "";
+  authors.appendChild(loadingRow("Loading…", 5));
   const data = await call(`/api/repos/${encodeURIComponent(s.repo)}/metrics?${params}`);
   renderMetrics(data);
 }
@@ -407,9 +426,11 @@ async function loadCommitPage() {
     limit: commitModal.pageSize, offset: commitModal.offset,
   });
   if (commitModal.search) params.set("search", commitModal.search);
+  const rows = document.getElementById("commit-rows");
+  rows.innerHTML = "";
+  rows.appendChild(loadingRow("Loading commits…", 5));
   const data = await call(`/api/repos/${encodeURIComponent(metricsState.repo)}/commits?${params}`);
   commitModal.total = data.total;
-  const rows = document.getElementById("commit-rows");
   rows.innerHTML = "";
   for (const c of data.commits) {
     const tr = document.createElement("tr");

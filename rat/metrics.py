@@ -8,7 +8,9 @@ from a single `git log --numstat -M --no-merges` parse:
 - directory metrics are recursive rollups over immediate children,
 - repository metrics are directory metrics at the root ("").
 
-Parsed history is cached per repository and invalidated when HEAD moves.
+Parsed history is cached in memory per repository and persisted to
+.rat-cache.json beside it; both invalidate when HEAD moves or .mailmap
+changes, and the disk copy lets a restart skip re-parsing large histories.
 """
 import json
 import re
@@ -30,6 +32,7 @@ _LOG_ARGS = [
 ]
 
 _MERGES_FILE = ".rat-merges.json"
+_CACHE_FILE = ".rat-cache.json"
 
 
 class MetricsError(Exception):
@@ -300,6 +303,66 @@ def _parse_repo(repo_path: str) -> list[Commit]:
     return parse_log(proc.stdout.decode("utf-8", "replace"))
 
 
+def _build_analysis(head, mailmap_mtime, commits) -> Analysis:
+    """Derive the full analysis (aggregation, dirs, authors) from commits."""
+    agg, _ = aggregate(commits)
+    names, counts = {}, {}
+    for commit in commits:
+        names[commit.author_email] = commit.author_name
+        counts[commit.author_email] = counts.get(commit.author_email, 0) + 1
+    return Analysis(head, mailmap_mtime, commits, agg,
+                    _dir_set(agg), names, counts)
+
+
+def _load_disk_cache(repo_path: str, head, mailmap_mtime):
+    """Restore an analysis from .rat-cache.json; None when absent/stale.
+
+    A cache entry is only trusted while HEAD and the .mailmap mtime still
+    match what was saved; anything else re-parses from git.
+    """
+    try:
+        data = json.loads((Path(repo_path) / _CACHE_FILE).read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("head") != head or data.get("mailmap_mtime") != mailmap_mtime:
+        return None
+    try:
+        commits = [
+            Commit(hash_, name, email, int(ts), subject,
+                   [FileChange(path, int(added), int(removed))
+                    for path, added, removed in files])
+            for hash_, name, email, ts, subject, files in data["commits"]
+        ]
+        return _build_analysis(head, mailmap_mtime, commits)
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None  # corrupt cache: fall back to a fresh git parse
+
+
+def _save_disk_cache(repo_path: str, analysis: Analysis) -> None:
+    """Persist the parsed history beside the repo (atomic replace)."""
+    payload = {
+        "head": analysis.head,
+        "mailmap_mtime": analysis.mailmap_mtime,
+        "commits": [
+            [c.hash, c.author_name, c.author_email, c.committer_ts, c.subject,
+             [[f.path, f.added, f.removed] for f in c.files]]
+            for c in analysis.commits
+        ],
+    }
+    cache = Path(repo_path) / _CACHE_FILE
+    tmp = cache.with_name(_CACHE_FILE + ".tmp")
+    try:
+        tmp.write_text(json.dumps(payload))
+        tmp.replace(cache)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass  # unwritable repo: the in-memory cache still serves requests
+
+
 _ANALYSIS_CACHE: dict[str, Analysis] = {}
 _CACHE_LOCK = threading.Lock()
 
@@ -307,6 +370,8 @@ _CACHE_LOCK = threading.Lock()
 def get_analysis(repo_path) -> Analysis:
     """Parse (or reuse) a repository's full history analysis.
 
+    Lookup order: in-memory cache, then .rat-cache.json on disk (so a
+    restart does not re-parse large histories), then a fresh git parse.
     The cache key is (HEAD, .mailmap mtime): editing the mailmap changes
     author identities without moving HEAD.
     """
@@ -318,14 +383,10 @@ def get_analysis(repo_path) -> Analysis:
         if (cached is not None and cached.head == head
                 and cached.mailmap_mtime == mailmap_mtime):
             return cached
-        commits = _parse_repo(key)
-        agg, _ = aggregate(commits)
-        names, counts = {}, {}
-        for commit in commits:
-            names[commit.author_email] = commit.author_name
-            counts[commit.author_email] = counts.get(commit.author_email, 0) + 1
-        analysis = Analysis(head, mailmap_mtime, commits, agg,
-                            _dir_set(agg), names, counts)
+        analysis = _load_disk_cache(key, head, mailmap_mtime)
+        if analysis is None:
+            analysis = _build_analysis(head, mailmap_mtime, _parse_repo(key))
+            _save_disk_cache(key, analysis)
         _ANALYSIS_CACHE[key] = analysis
         return analysis
 
