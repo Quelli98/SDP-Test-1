@@ -2,6 +2,15 @@ repos/
 uploads/
 __pycache__/
 *.pyc
-.fixtures/
 .qoder/
 pytest-of-vmuser/
+
+# .fixtures holds runtime scratch (logs, built repos); the test suite ships
+.fixtures/*
+!.fixtures/test_smoke.py
+!.fixtures/test_metrics.py
+!.fixtures/fixture_metrics.py
+!.fixtures/fixture_mailmap.py
+!.fixtures/fixture.zip
+!.fixtures/bare.zip
+!.fixtures/nogit.zip

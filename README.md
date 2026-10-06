@@ -1,49 +1,90 @@
 # RAT — Repo Analysis Tool
 
-A web-app dashboard that ingests git repositories and analyses their metrics
-(lines added/removed, growth, churn, authorship) per author, file, directory,
-and repository. Supports multiple repositories side by side with filtering
-by author, path, time period, and manual commit selection, plus mailmap and
-manual author merging.
+A web dashboard that ingests git repositories — by remote URL (deep clone) or
+zip upload — and computes metrics (lines added/removed, growth, churn,
+modifications, frequency, churn rate, author churn and ownership) per file,
+directory, repository, commit set, and author.
 
-## Requirements
+## Features
+
+- Ingest by remote URL (deep clone) or zip upload containing `.git`
+- All five metric categories: file, directory, repository, commit set, author
+- Filtering by repository, author, file/directory drill-down, time period,
+  and a manually selected commit list (searchable, paginated browser)
+- Author merging: automatic via the repository's `.mailmap`, plus manual
+  alias→canonical merging through the UI and API
+- Multiple repositories side by side with an async overview table
+- Per-repository persistent metric cache (`.rat-cache.json`): large histories
+  parse once and survive server restarts
+- JSON error handling and loading states throughout
+
+## Prerequisites
 
 - Python 3.10+
-- The `git` command-line tool (repository ingestion and metric computation
-  both run through a single `git log` pass per repository)
-- Flask (the only Python dependency)
+- The `git` command-line tool
+- `pip`
 
-## Running
+## Install
 
 ```bash
-pip install -r requirements.txt
-python app.py
+python3 -m pip install -r requirements.txt pytest
 ```
 
-Then open http://127.0.0.1:5000 — no database or configuration is needed;
-repositories are cloned into `repos/` and analysed on demand.
+(On Windows use `python` instead of `python3` throughout.)
 
-Alternatively: `python -m flask --app app run` (production-style, debug off).
+## Database / setup
 
-## Performance
+None required. There is no database, no configuration file, and no migration
+step — cloned/uploaded repositories are stored in `repos/`, which is created
+automatically on startup.
 
-Each repository's history is parsed once per HEAD (`git log --no-merges -M
---numstat -z`), then served from an in-memory cache that is also persisted
-to `.rat-cache.json` beside the repository — a server restart restores
-large histories from disk instead of re-parsing them. The cache is
-invalidated automatically when HEAD moves or `.mailmap` changes.
+## Run (development)
 
-Reference timings: cJSON (~1k commits) parses in ~0.2 s; Redis (~12k
-commits, ~216 MB .git) parses in ~9 s once, then serves any query in
-~10 ms from cache and restores in well under a second after a restart.
+```bash
+python3 app.py
+```
 
-## Ingestion
+Then open **http://127.0.0.1:5000** (port 5000).
 
-- **Clone URL** — deep-clones a remote repository (full history).
-- **Upload zip** — accepts a zip archive of a repository that includes its
-  `.git` directory (or file).
+## Production
 
-## API
+There is no build step (pure Python + static assets). Start without debug:
+
+```bash
+python3 -m flask --app app run --port 5000
+```
+
+## Tests
+
+From the project root:
+
+```bash
+python3 -m pytest .fixtures/test_smoke.py .fixtures/test_metrics.py
+```
+
+70 tests cover ingestion (clone + zip layouts, error cases), the metric
+engine (renames, binaries, deletions, directory rollups, commit sets,
+author metrics), filtering, author merging (mailmap + manual), multi-repo
+isolation, the persistent cache, and API error handling.
+
+## Docker
+
+Not used — plain Python/Flask; no container setup is required.
+
+## AI Usage (COMS3011A AI Policy)
+
+> Replace `<model>` below with the model name shown in your Qoder settings
+> before submitting.
+
+This repository makes use of AI code generation using the following tools: Qoder[<model>].
+
+This repository does not use AI in-line editing tools.
+
+This repository does not use AI code review.
+
+This README was generated with the assistance of: Qoder[<model>].
+
+## API reference
 
 | Method | Path                     | Description                                    |
 |--------|--------------------------|------------------------------------------------|
@@ -56,45 +97,13 @@ commits, ~216 MB .git) parses in ~9 s once, then serves any query in
 | GET    | `/api/repos/<r>/commits` | Browsable commit list (search, pagination)     |
 | GET / PUT | `/api/repos/<r>/merges` | Manual alias→canonical author merges          |
 
-### Metrics query parameters
+Metrics query parameters: `path` (file/directory, default root), `author`
+(email), `since`/`until` (unix timestamp or ISO date; `until` exclusive,
+date-only `until` covers the whole day), `commits` (comma-separated hashes).
+Responses carry the object's metrics, its immediate children (directories),
+and per-author churn/modifications/ownership.
 
-- `path` — file or directory (default: repository root)
-- `author` — author email
-- `since` / `until` — unix timestamp or ISO date (`until` is exclusive;
-  a date-only `until` covers the whole day)
-- `commits` — comma-separated commit hashes (manual commit-set selection)
-
-The response carries the object's metrics (added, removed, growth, churn,
-modifications, modification frequency, churn rate), its immediate children
-(for directories) and per-author churn/modifications/ownership.
-
-### Multiple repositories
-
-Repositories live side by side: the ingestion table doubles as a
-multi-repository overview whose commit/churn/author summaries fill in
-asynchronously (large repositories parse once, then serve from cache), and
-the repository selector in the filter bar switches the analysis target.
-Analyses, caches, and author-merge maps are all per repository.
-
-### Dashboard filtering
-
-The dashboard filters metrics by repository (selector), author, date range,
-file/directory (drill-down tree), and a manually selected commit list
-(searchable, paginated commit browser). Commit search matches subject,
-author name/email, and hashes (4+ character prefixes).
-
-### Author merging
-
-- Repositories that ship a `.mailmap` merge identities automatically: history
-  is read through git's mailmap-aware placeholders, so aliases collapse into
-  their canonical author at no extra cost.
-- Manual merges map alias emails onto a canonical email:
-  `PUT /api/repos/<r>/merges` with `{"merges": {"alias@x": "canonical@y"}}`
-  (an empty map clears them). Mappings persist in `.rat-merges.json` beside
-  the repository and re-aggregate author metrics; object-level metrics are
-  unaffected. The dashboard exposes the same flow via *Merge authors…*
-
-### Metric semantics
+## Metric semantics
 
 - History is the set of non-merge commits reachable from HEAD; the initial
   commit diffs against an empty tree.
@@ -103,16 +112,17 @@ author name/email, and hashes (4+ character prefixes).
 - Binary files are not measured; deletions count as removed lines.
 - Directory metrics are recursive rollups over immediate children;
   repository metrics are directory metrics at the root.
-- Parsed history is cached per repository (memory + `.rat-cache.json`) and
-  invalidated when HEAD moves or the repository's `.mailmap` changes.
 - Author identities merge through the repository's `.mailmap` and through
-  manual alias→canonical mappings (`.rat-merges.json`).
+  manual alias→canonical mappings (`.rat-merges.json` beside the repo).
 
-## Status
+## Performance
 
-- [x] Skeleton dashboard + both ingestion paths
-- [x] Metric engine (file / directory / repository / commit set / author)
-- [x] Filtering UI (repo, author, path, commit period/selection)
-- [x] Author merging (mailmap + manual)
-- [x] Multiple repository support (overview + selector)
-- [x] Persistent per-repo metric cache, loading states, JSON error handling
+Each repository's history is parsed once per HEAD (`git log --no-merges -M
+--numstat -z`), then served from an in-memory cache that is also persisted
+to `.rat-cache.json` beside the repository — a server restart restores
+large histories from disk instead of re-parsing them. The cache is
+invalidated automatically when HEAD moves or `.mailmap` changes.
+
+Reference timings: cJSON (~1k commits) parses in ~0.2 s; Redis (~12k
+commits, ~216 MB .git) parses in ~9 s once, then serves any query in
+~10 ms from cache and restores in ~0.1 s after a restart.
