@@ -26,6 +26,23 @@
   th { background: #f3f4f6; }
   td.mono { font-family: ui-monospace, monospace; color: var(--muted); }
   .empty { padding: 24px; text-align: center; color: var(--muted); font-size: .875rem; }
+  #metrics-section { margin-top: 24px; }
+  #metrics-section .card > h2 { display: flex; justify-content: space-between; align-items: center; }
+  .close-btn { background: none; color: var(--muted); border: 0; font-size: 1rem; cursor: pointer; padding: 0; margin: 0; }
+  .filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 16px; }
+  .filters label { display: flex; flex-direction: column; gap: 4px; font-size: .75rem; color: var(--muted); }
+  .filters select, .filters input[type=date] { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: .875rem; }
+  .filters button { margin-top: 0; }
+  .secondary { background: #4b5563; }
+  .breadcrumb { font-size: .875rem; margin-bottom: 8px; }
+  .breadcrumb a { color: var(--accent); text-decoration: none; }
+  h3 { font-size: .875rem; margin: 16px 0 6px; color: var(--muted); }
+  #metrics-tables th, #metrics-tables td { font-size: .8125rem; padding: 8px 10px; }
+  #metrics-tables td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  #children-table tbody tr { cursor: pointer; }
+  #children-table tbody tr:hover { background: #f0f4ff; }
+  .type-dir { font-weight: 600; }
+  .head-info { font-size: .75rem; color: var(--muted); }
   @media (max-width: 700px) { .cards { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -54,6 +71,48 @@
     <tbody id="repo-rows"></tbody>
   </table>
   <div class="empty" id="repo-empty" hidden>No repositories ingested yet.</div>
+
+  <section id="metrics-section" hidden>
+    <div class="card">
+      <h2>
+        <span>Metrics — <span id="metrics-repo-name"></span>
+          <span class="head-info" id="metrics-head"></span></span>
+        <button class="close-btn" onclick="closeMetrics()" title="Close">✕</button>
+      </h2>
+      <div class="filters">
+        <label>Author
+          <select id="filter-author" onchange="applyFilters()"><option value="">All authors</option></select>
+        </label>
+        <label>From
+          <input type="date" id="filter-since">
+        </label>
+        <label>To
+          <input type="date" id="filter-until">
+        </label>
+        <button onclick="applyFilters()">Apply</button>
+        <button class="secondary" onclick="resetFilters()">Reset</button>
+      </div>
+      <div class="breadcrumb" id="breadcrumb"></div>
+      <h3 id="object-title"></h3>
+      <div id="metrics-tables">
+        <table id="object-table">
+          <thead><tr><th>Added</th><th>Removed</th><th>Growth</th><th>Churn</th><th>Mods</th><th>Freq</th><th>Churn rate</th></tr></thead>
+          <tbody><tr id="object-row"></tr></tbody>
+        </table>
+        <h3 id="children-title">Contents</h3>
+        <table id="children-table">
+          <thead><tr><th>Name</th><th>Type</th><th>Added</th><th>Removed</th><th>Growth</th><th>Churn</th><th>Mods</th><th>Freq</th><th>Rate</th></tr></thead>
+          <tbody id="children-rows"></tbody>
+        </table>
+        <div class="empty" id="children-empty" hidden></div>
+        <h3>Authors on this object</h3>
+        <table id="authors-table">
+          <thead><tr><th>Author</th><th>Email</th><th>Churn</th><th>Mods</th><th>Ownership</th></tr></thead>
+          <tbody id="author-rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
 </main>
 <script>
 const statusEl = document.getElementById("status");
@@ -118,8 +177,166 @@ async function refresh() {
   document.getElementById("repo-empty").hidden = repos.length > 0;
   for (const repo of repos) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${repo.name}</td><td class="mono">${repo.head ?? "—"}</td><td class="mono">${repo.path}</td>`;
+    const nameCell = document.createElement("td");
+    nameCell.textContent = repo.name;
+    const headCell = document.createElement("td");
+    headCell.className = "mono";
+    headCell.textContent = repo.head ?? "—";
+    const pathCell = document.createElement("td");
+    pathCell.className = "mono";
+    pathCell.textContent = repo.path;
+    const actionCell = document.createElement("td");
+    const btn = document.createElement("button");
+    btn.textContent = "Metrics";
+    btn.style.marginTop = "0";
+    btn.onclick = () => openMetrics(repo.name);
+    actionCell.appendChild(btn);
+    tr.append(nameCell, headCell, pathCell, actionCell);
     rows.appendChild(tr);
+  }
+}
+
+// --- metrics dashboard ----------------------------------------------------
+
+let metricsState = { repo: null, path: "", author: "", since: "", until: "" };
+
+const fmtInt = n => Number(n).toLocaleString();
+const fmtRate = n => Number(n).toFixed(3);
+const fmtPct = n => (Number(n) * 100).toFixed(1) + "%";
+
+async function openMetrics(repo) {
+  metricsState = { repo, path: "", author: "", since: "", until: "" };
+  document.getElementById("filter-since").value = "";
+  document.getElementById("filter-until").value = "";
+  document.getElementById("metrics-section").hidden = false;
+  setStatus("");
+  try {
+    await loadAuthors();
+    await loadMetrics();
+  } catch (err) {
+    setStatus(err.message, "error");
+  }
+  document.getElementById("metrics-section").scrollIntoView({ behavior: "smooth" });
+}
+
+function closeMetrics() {
+  document.getElementById("metrics-section").hidden = true;
+}
+
+async function loadAuthors() {
+  const data = await call(`/api/repos/${encodeURIComponent(metricsState.repo)}/authors`);
+  const select = document.getElementById("filter-author");
+  select.innerHTML = "<option value=\"\">All authors</option>" +
+    data.authors.map(a =>
+      `<option value="${a.email}">${a.name} (${a.commits} commits)</option>`).join("");
+  select.value = metricsState.author;
+}
+
+function applyFilters() {
+  metricsState.author = document.getElementById("filter-author").value;
+  metricsState.since = document.getElementById("filter-since").value;
+  metricsState.until = document.getElementById("filter-until").value;
+  loadMetrics().catch(err => setStatus(err.message, "error"));
+}
+
+function resetFilters() {
+  document.getElementById("filter-author").value = "";
+  document.getElementById("filter-since").value = "";
+  document.getElementById("filter-until").value = "";
+  applyFilters();
+}
+
+function navigate(path) {
+  metricsState.path = path;
+  loadMetrics().catch(err => setStatus(err.message, "error"));
+}
+
+async function loadMetrics() {
+  const s = metricsState;
+  const params = new URLSearchParams();
+  if (s.path) params.set("path", s.path);
+  if (s.author) params.set("author", s.author);
+  if (s.since) params.set("since", s.since);
+  if (s.until) params.set("until", s.until);
+  const data = await call(`/api/repos/${encodeURIComponent(s.repo)}/metrics?${params}`);
+  renderMetrics(data);
+}
+
+function renderMetrics(data) {
+  document.getElementById("metrics-repo-name").textContent = data.repo;
+  document.getElementById("metrics-head").textContent =
+    data.head ? `@ ${data.head} · ${data.commit_count.toLocaleString()} commits in set` : "no commits";
+
+  const breadcrumb = document.getElementById("breadcrumb");
+  breadcrumb.innerHTML = "";
+  const rootLink = document.createElement("a");
+  rootLink.href = "#";
+  rootLink.textContent = "root";
+  rootLink.onclick = e => { e.preventDefault(); navigate(""); };
+  breadcrumb.appendChild(rootLink);
+  let acc = "";
+  for (const segment of data.path ? data.path.split("/") : []) {
+    acc = acc ? `${acc}/${segment}` : segment;
+    breadcrumb.append(" / ");
+    const link = document.createElement("a");
+    link.href = "#";
+    link.textContent = segment;
+    const target = acc;
+    link.onclick = e => { e.preventDefault(); navigate(target); };
+    breadcrumb.appendChild(link);
+  }
+
+  document.getElementById("object-title").textContent =
+    data.path === "" ? "Repository (root)" : `${data.path} — ${data.type}`;
+  const o = data.object;
+  document.getElementById("object-row").innerHTML =
+    `<td class="num">${fmtInt(o.added)}</td><td class="num">${fmtInt(o.removed)}</td>` +
+    `<td class="num">${fmtInt(o.growth)}</td><td class="num">${fmtInt(o.churn)}</td>` +
+    `<td class="num">${fmtInt(o.modifications)}</td><td class="num">${fmtRate(o.frequency)}</td>` +
+    `<td class="num">${fmtRate(o.churn_rate)}</td>`;
+
+  const rows = document.getElementById("children-rows");
+  rows.innerHTML = "";
+  const isDir = data.type === "dir";
+  document.getElementById("children-title").textContent = isDir ? "Contents" : "";
+  document.getElementById("children-table").style.display = isDir ? "" : "none";
+  document.getElementById("children-empty").hidden = isDir && data.children.length > 0;
+  if (isDir && !data.children.length) {
+    document.getElementById("children-empty").textContent =
+      "No changes under this directory for the current filters.";
+  }
+  for (const child of data.children) {
+    const tr = document.createElement("tr");
+    const cells = [
+      child.name, child.type, fmtInt(child.added), fmtInt(child.removed),
+      fmtInt(child.growth), fmtInt(child.churn), fmtInt(child.modifications),
+      fmtRate(child.frequency), fmtRate(child.churn_rate),
+    ];
+    cells.forEach((value, i) => {
+      const td = document.createElement("td");
+      if (i === 0 && child.type === "dir") td.className = "type-dir";
+      if (i > 1) td.className = "num";
+      td.textContent = value;
+      tr.appendChild(td);
+    });
+    tr.title = "View metrics";
+    tr.onclick = () => navigate(child.path);
+    rows.appendChild(tr);
+  }
+
+  const authorRows = document.getElementById("author-rows");
+  authorRows.innerHTML = "";
+  for (const a of data.authors) {
+    const tr = document.createElement("tr");
+    [a.name, a.email, fmtInt(a.churn), fmtInt(a.modifications), fmtPct(a.ownership)]
+      .forEach((value, i) => {
+        const td = document.createElement("td");
+        if (i === 1) td.className = "mono";
+        if (i > 1) td.className = "num";
+        td.textContent = value;
+        tr.appendChild(td);
+      });
+    authorRows.appendChild(tr);
   }
 }
 
